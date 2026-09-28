@@ -37,6 +37,10 @@ class BenchmarkConfig(BaseModel):
         1,
         description="Number of discarded warmup runs per test shape; also used for generation latency probes",
     )
+    short_warmup: bool = Field(
+        False,
+        description="Run warmup passes at a reduced size (pp <= 2048, tg <= 512) when the measured shape is larger",
+    )
     no_cache: bool = Field(
         ..., description="Ensure unique requests to avoid prefix caching"
     )
@@ -287,6 +291,14 @@ class BenchmarkConfig(BaseModel):
             ),
         )
         parser.add_argument(
+            "--short-warmup",
+            action="store_true",
+            help=(
+                "When --pp is greater than 2048 or --tg is greater than 512, "
+                "run warmup passes at pp 2048 and tg 512 instead of the full size"
+            ),
+        )
+        parser.add_argument(
             "--no-cache",
             action="store_true",
             help="Ensure unique requests to avoid prefix caching and send cache_prompt=false to the server",
@@ -446,6 +458,7 @@ class BenchmarkConfig(BaseModel):
             depths=args.depth,
             num_runs=args.runs,
             warmup_runs=args.warmup_runs,
+            short_warmup=args.short_warmup,
             no_cache=args.no_cache,
             fixed_prompt=args.fixed_prompt,
             latency_mode=args.latency_mode,

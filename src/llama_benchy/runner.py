@@ -127,9 +127,16 @@ class BenchmarkRunner:
                                     expected_pp = current_pp
                                     expected_ctx = current_depth
 
+                                    # Short warmup: cap warmup pass size for large shapes
+                                    gen_pp = current_pp
+                                    gen_tg = tg
+                                    if is_warmup and self.config.short_warmup and (pp > 2048 or tg > 512):
+                                        gen_pp = min(current_pp, 2048)
+                                        gen_tg = min(tg, 512)
+
                                     prompt_batch = self.prompt_gen.generate_batch(
                                         concurrency,
-                                        current_pp,
+                                        gen_pp,
                                         current_depth,
                                         self.config.no_cache,
                                         fixed=self.config.fixed_prompt
@@ -148,7 +155,7 @@ class BenchmarkRunner:
                                                 session,
                                                 context_text=context,
                                                 prompt_text=CONTEXT_LOAD_USER_MESSAGE,
-                                                max_tokens=tg,
+                                                max_tokens=gen_tg,
                                                 no_cache=self.config.no_cache,
                                                 tokenizer=tokenizer,
                                                 progress=None if is_warmup else self.progress,
@@ -176,7 +183,7 @@ class BenchmarkRunner:
                                                 session,
                                                 context_text=context,
                                                 prompt_text=prompt,
-                                                max_tokens=tg,
+                                                max_tokens=gen_tg,
                                                 no_cache=self.config.no_cache,
                                                 tokenizer=tokenizer,
                                                 progress=None if is_warmup else self.progress,
@@ -206,7 +213,7 @@ class BenchmarkRunner:
                                                 session,
                                                 context_text=context,
                                                 prompt_text=prompt,
-                                                max_tokens=tg,
+                                                max_tokens=gen_tg,
                                                 no_cache=self.config.no_cache,
                                                 tokenizer=tokenizer,
                                                 progress=None if is_warmup else self.progress,
