@@ -45,7 +45,7 @@ class _FakeCorpus:
 class _FakePromptGenerator:
     corpus = _FakeCorpus()
 
-    def generate_batch(self, concurrency, pp, depth, no_cache):
+    def generate_batch(self, concurrency, pp, depth, no_cache, fixed=False):
         return [("", "hello") for _ in range(concurrency)]
 
 

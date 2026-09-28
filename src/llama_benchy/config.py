@@ -40,6 +40,10 @@ class BenchmarkConfig(BaseModel):
     no_cache: bool = Field(
         ..., description="Ensure unique requests to avoid prefix caching"
     )
+    fixed_prompt: bool = Field(
+        False,
+        description="Reuse the same generated prompt for every run instead of sampling new ones",
+    )
     latency_mode: str = Field(
         ..., description="Method to measure latency: 'api', 'generation', or 'none'"
     )
@@ -288,6 +292,11 @@ class BenchmarkConfig(BaseModel):
             help="Ensure unique requests to avoid prefix caching and send cache_prompt=false to the server",
         )
         parser.add_argument(
+            "--fixed-prompt",
+            action="store_true",
+            help="Use the same generated prompt for every run instead of sampling a new random one each run",
+        )
+        parser.add_argument(
             "--post-run-cmd",
             type=str,
             default=None,
@@ -390,6 +399,11 @@ class BenchmarkConfig(BaseModel):
             args.exit_on_first_fail = True
         if args.warmup_runs < 0:
             parser.error("--warmup-runs must be >= 0")
+        if args.fixed_prompt and args.no_cache:
+            parser.error(
+                "--fixed-prompt and --no-cache conflict: no-cache adds a random "
+                "suffix to every prompt, so prompts would no longer be fixed"
+            )
 
         try:
             extra_body = BenchmarkConfig._parse_extra_body(args.extra_body)
@@ -433,6 +447,7 @@ class BenchmarkConfig(BaseModel):
             num_runs=args.runs,
             warmup_runs=args.warmup_runs,
             no_cache=args.no_cache,
+            fixed_prompt=args.fixed_prompt,
             latency_mode=args.latency_mode,
             no_warmup=args.no_warmup,
             skip_coherence=args.skip_coherence,

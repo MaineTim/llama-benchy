@@ -9,6 +9,9 @@ class PromptGenerator:
         self.corpus = corpus
         self.tokenizer = corpus.get_tokenizer()
         self.all_tokens = corpus.get_tokens()
+        # Cache of fixed batches keyed by (batch_size, prompt_tokens, context_tokens)
+        # so repeated runs reuse the exact same prompts.
+        self._fixed_batches: dict = {}
 
     def generate(self, prompt_tokens: int, context_tokens: int = 0, no_cache: bool = False) -> Tuple[str, str]:
         """
@@ -47,8 +50,18 @@ class PromptGenerator:
             
         return context_text, prompt_text
 
-    def generate_batch(self, batch_size: int, prompt_tokens: int, context_tokens: int = 0, no_cache: bool = False) -> List[Tuple[str, str]]:
+    def generate_batch(self, batch_size: int, prompt_tokens: int, context_tokens: int = 0, no_cache: bool = False, fixed: bool = False) -> List[Tuple[str, str]]:
         """
         Generates a batch of (context, prompt) pairs.
+
+        If `fixed` is True, the batch is generated once per (batch_size,
+        prompt_tokens, context_tokens) shape and the same prompts are
+        returned on subsequent calls, so every run uses identical input.
         """
-        return [self.generate(prompt_tokens, context_tokens, no_cache) for _ in range(batch_size)]
+        if not fixed:
+            return [self.generate(prompt_tokens, context_tokens, no_cache) for _ in range(batch_size)]
+
+        key = (batch_size, prompt_tokens, context_tokens)
+        if key not in self._fixed_batches:
+            self._fixed_batches[key] = [self.generate(prompt_tokens, context_tokens, no_cache) for _ in range(batch_size)]
+        return list(self._fixed_batches[key])

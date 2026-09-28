@@ -29,6 +29,15 @@ async def main_async():
     print(f"Benchmarking model: {config.model} at {config.base_url}")
     print(f"Concurrency levels: {config.concurrency_levels}")
 
+    if config.fixed_prompt:
+        print(
+            "Warning: --fixed-prompt reuses the same prompt for every run. "
+            "If the server has prompt caching enabled, prefill (pp) numbers "
+            "may be inflated by cache hits. Make sure prompt caching is "
+            "disabled on the server, otherwise ignore the prefill numbers "
+            "reported below."
+        )
+
     # 3. Prepare Data
     corpus = TokenizedCorpus(config.book_url, config.tokenizer, config.model)
     print(f"Total tokens available in text corpus: {len(corpus)}")

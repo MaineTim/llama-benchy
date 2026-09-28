@@ -131,7 +131,8 @@ class BenchmarkRunner:
                                         concurrency,
                                         current_pp,
                                         current_depth,
-                                        self.config.no_cache
+                                        self.config.no_cache,
+                                        fixed=self.config.fixed_prompt
                                     )
 
                                     if self.config.enable_prefix_caching and depth > 0:

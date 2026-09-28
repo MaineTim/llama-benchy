@@ -167,6 +167,7 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--runs`: Number of runs per test (Default: 3).
 -   `--warmup-runs`: Number of discarded warmup runs per test shape (Default: 1). For concurrency `N`, each warmup run sends `N` requests. Also controls the number of discarded warmup probes for `--latency-mode generation`; it does not affect the initial prompt-adaptation warmup.
 -   `--no-cache`: Add noise to requests to improve prefix caching avoidance. Also sends `cache-prompt=false` to the server.
+-   `--fixed-prompt`: Reuse the same generated prompt for every run instead of sampling a new random one each run. Conflicts with `--no-cache`. If the server has prompt caching enabled, prefill numbers may be inflated by cache hits — make sure prompt caching is disabled on the server, otherwise ignore the reported prefill numbers.
 -   `--post-run-cmd`: Command to execute after each test run.
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
 -   `--latency-mode`: Method to measure latency: 'api' (call list models function) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
