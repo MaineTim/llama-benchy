@@ -1,17 +1,18 @@
 import uuid
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 from .corpus import TokenizedCorpus
+from .promptfile import FixedPrompt
 
 class PromptGenerator:
-    def __init__(self, corpus: TokenizedCorpus):
+    def __init__(self, corpus: TokenizedCorpus, fixed_prompt: Optional[FixedPrompt] = None):
         self.corpus = corpus
         self.tokenizer = corpus.get_tokenizer()
         self.all_tokens = corpus.get_tokens()
-        # Cache of fixed batches keyed by (batch_size, prompt_tokens, context_tokens)
-        # so repeated runs reuse the exact same prompts.
-        self._fixed_batches: dict = {}
+        # Pinned (context, prompt) from a prompt file, when --fixed-prompt is
+        # in use. The file is the cross-session source of truth.
+        self.fixed_prompt = fixed_prompt
 
     def generate(self, prompt_tokens: int, context_tokens: int = 0, no_cache: bool = False) -> Tuple[str, str]:
         """
@@ -54,14 +55,21 @@ class PromptGenerator:
         """
         Generates a batch of (context, prompt) pairs.
 
-        If `fixed` is True, the batch is generated once per (batch_size,
-        prompt_tokens, context_tokens) shape and the same prompts are
-        returned on subsequent calls, so every run uses identical input.
+        If `fixed` is True, every run reuses the exact (context, prompt) text
+        pinned in the prompt file, so results are comparable across sessions.
+        The requested prompt/context token sizes are nominal in this mode; the
+        pinned text is sent as-is. With concurrency > 1 all slots share the
+        same pinned text.
         """
         if not fixed:
             return [self.generate(prompt_tokens, context_tokens, no_cache) for _ in range(batch_size)]
 
-        key = (batch_size, prompt_tokens, context_tokens)
-        if key not in self._fixed_batches:
-            self._fixed_batches[key] = [self.generate(prompt_tokens, context_tokens, no_cache) for _ in range(batch_size)]
-        return list(self._fixed_batches[key])
+        if self.fixed_prompt is None:
+            raise RuntimeError(
+                "Fixed prompts requested but no prompt file was loaded. "
+                "Re-run to create the prompt file (or check --prompt-path)."
+            )
+
+        context_text = self.fixed_prompt.context if context_tokens > 0 else ""
+        prompt_text = self.fixed_prompt.prompt
+        return [(context_text, prompt_text) for _ in range(batch_size)]

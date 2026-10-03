@@ -48,6 +48,26 @@ class BenchmarkConfig(BaseModel):
         False,
         description="Reuse the same generated prompt for every run instead of sampling new ones",
     )
+    prompt_path: Optional[str] = Field(
+        None,
+        description="Path to the fixed prompt file (JSON manifest). Implies --fixed-prompt.",
+    )
+    prompt_offset: Optional[int] = Field(
+        None,
+        description="Character offset in the source text where the fixed slice starts (when creating the prompt file). Implies --fixed-prompt.",
+    )
+    prompt_length: Optional[int] = Field(
+        None,
+        description="Character length of the fixed prompt slice (when creating the prompt file). Implies --fixed-prompt.",
+    )
+    prompt_context_length: Optional[int] = Field(
+        None,
+        description="Character length of the fixed context slice preceding the prompt (when creating the prompt file). Implies --fixed-prompt.",
+    )
+    new_fixed_prompt: bool = Field(
+        False,
+        description="Cut a fresh slice and overwrite the existing prompt file (backed up to <path>.bak) instead of reusing it",
+    )
     latency_mode: str = Field(
         ..., description="Method to measure latency: 'api', 'generation', or 'none'"
     )
@@ -306,7 +326,59 @@ class BenchmarkConfig(BaseModel):
         parser.add_argument(
             "--fixed-prompt",
             action="store_true",
-            help="Use the same generated prompt for every run instead of sampling a new random one each run",
+            help=(
+                "Use the same prompt for every run and across sessions. The prompt is a fixed "
+                "character slice of the source text, pinned to a JSON file (default under "
+                "~/.cache/llama-benchy/prompts/); later runs read that file. Conflicts with --no-cache."
+            ),
+        )
+        parser.add_argument(
+            "--prompt-path",
+            type=str,
+            default=None,
+            metavar="PATH",
+            help=(
+                "Path to the fixed prompt file. Created on first use, read as-is on later runs. "
+                "Implies --fixed-prompt. One file = one fixed prompt family; use different paths "
+                "to keep independent baselines."
+            ),
+        )
+        parser.add_argument(
+            "--prompt-offset",
+            type=int,
+            default=None,
+            help=(
+                "Character offset in the source text where the fixed slice starts "
+                "(default: 0). Only used when creating the prompt file; must match an existing file."
+            ),
+        )
+        parser.add_argument(
+            "--prompt-length",
+            type=int,
+            default=None,
+            help=(
+                "Character length of the fixed prompt slice (default: 4x the first --pp value, "
+                "roughly one token per 4 chars for English). Only used when creating the prompt file; "
+                "must match an existing file."
+            ),
+        )
+        parser.add_argument(
+            "--prompt-context-length",
+            type=int,
+            default=None,
+            help=(
+                "Character length of the fixed context slice sent before the prompt when --depth > 0 "
+                "(default: 4096). Only used when creating the prompt file; must match an existing file."
+            ),
+        )
+        parser.add_argument(
+            "--new-fixed-prompt",
+            action="store_true",
+            help=(
+                "Start a fresh fixed-prompt family: cut a new slice and overwrite the prompt file "
+                "(the old file is backed up to <path>.bak). Results from earlier sessions are no "
+                "longer comparable to this one. Implies --fixed-prompt."
+            ),
         )
         parser.add_argument(
             "--post-run-cmd",
@@ -411,10 +483,25 @@ class BenchmarkConfig(BaseModel):
             args.exit_on_first_fail = True
         if args.warmup_runs < 0:
             parser.error("--warmup-runs must be >= 0")
-        if args.fixed_prompt and args.no_cache:
+        if args.prompt_offset is not None and args.prompt_offset < 0:
+            parser.error("--prompt-offset must be >= 0")
+        if args.prompt_length is not None and args.prompt_length <= 0:
+            parser.error("--prompt-length must be > 0")
+        if args.prompt_context_length is not None and args.prompt_context_length < 0:
+            parser.error("--prompt-context-length must be >= 0")
+
+        fixed_requested = (
+            args.fixed_prompt
+            or bool(args.prompt_path)
+            or args.new_fixed_prompt
+            or args.prompt_offset is not None
+            or args.prompt_length is not None
+            or args.prompt_context_length is not None
+        )
+        if fixed_requested and args.no_cache:
             parser.error(
-                "--fixed-prompt and --no-cache conflict: no-cache adds a random "
-                "suffix to every prompt, so prompts would no longer be fixed"
+                "--fixed-prompt / --prompt-path / --new-fixed-prompt and --no-cache conflict: "
+                "no-cache adds a random suffix to every prompt, so prompts would no longer be fixed"
             )
 
         try:
@@ -460,7 +547,12 @@ class BenchmarkConfig(BaseModel):
             warmup_runs=args.warmup_runs,
             short_warmup=args.short_warmup,
             no_cache=args.no_cache,
-            fixed_prompt=args.fixed_prompt,
+            fixed_prompt=fixed_requested,
+            prompt_path=args.prompt_path,
+            prompt_offset=args.prompt_offset,
+            prompt_length=args.prompt_length,
+            prompt_context_length=args.prompt_context_length,
+            new_fixed_prompt=args.new_fixed_prompt,
             latency_mode=args.latency_mode,
             no_warmup=args.no_warmup,
             skip_coherence=args.skip_coherence,

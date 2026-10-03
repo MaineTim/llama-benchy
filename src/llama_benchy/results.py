@@ -24,6 +24,12 @@ class BenchmarkMetadata(BaseModel):
     model: str = Field(..., description="Model name")
     prefix_caching_enabled: bool = Field(..., description="Whether prefix caching was enabled")
     max_concurrency: int = Field(..., description="Maximum concurrency level used in the suite")
+    source_text_sha256: Optional[str] = Field(None, description="SHA-256 of the cached source book text")
+    source_text_chars: Optional[int] = Field(None, description="Character count of the source book text")
+    prompt_file: Optional[str] = Field(None, description="Path to the fixed prompt file used (--fixed-prompt)")
+    prompt_sha256: Optional[str] = Field(None, description="SHA-256 of the exact fixed prompt text sent; compare this (not token counts) to check two runs used the same prompt")
+    prompt_chars: Optional[int] = Field(None, description="Character length of the fixed prompt text")
+    prompt_tokens: Optional[int] = Field(None, description="Fixed prompt token count under this run's tokenizer (differs across tokenizers by design)")
 
 class BenchmarkRun(BaseModel):
     concurrency: int = Field(..., description="Concurrency level for this run")

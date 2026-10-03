@@ -168,7 +168,12 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--warmup-runs`: Number of discarded warmup runs per test shape (Default: 1). For concurrency `N`, each warmup run sends `N` requests. Also controls the number of discarded warmup probes for `--latency-mode generation`; it does not affect the initial prompt-adaptation warmup.
 -   `--short-warmup`: When `--pp` is greater than 2048 or `--tg` is greater than 512, run warmup passes at pp 2048 and tg 512 instead of the full size, to speed up warmup. Measured runs always use the requested sizes.
 -   `--no-cache`: Add noise to requests to improve prefix caching avoidance. Also sends `cache-prompt=false` to the server.
--   `--fixed-prompt`: Reuse the same generated prompt for every run instead of sampling a new random one each run. Conflicts with `--no-cache`. If the server has prompt caching enabled, prefill numbers may be inflated by cache hits — make sure prompt caching is disabled on the server, otherwise ignore the reported prefill numbers.
+-   `--fixed-prompt`: Use the same prompt for every run **and across sessions**. The prompt is a fixed character slice of the source text, pinned to a JSON file; later runs read that file, so the exact same text is sent by construction. On first use the slice is cut from the (cached) source text and written to the prompt file; on later uses the file is read as-is. The source text hash and the prompt hash (plus the prompt's token count) are printed at run start and recorded in JSON reports, so you can verify at a glance that two result sets used the same prompt. Conflicts with `--no-cache`. If the server has prompt caching enabled, prefill numbers may be inflated by cache hits — make sure prompt caching is disabled on the server, otherwise ignore the reported prefill numbers.
+-   `--prompt-path PATH`: Path to the fixed prompt file. Created on first use, read as-is on later runs. Implies `--fixed-prompt`. One file = one fixed prompt family — use different paths to keep independent baselines without clobbering each other.
+-   `--prompt-offset N`: Character offset in the source text where the fixed slice starts (Default: 0). Only used when creating the prompt file; if it doesn't match an existing file the run is aborted (pass a different `--prompt-path` for a new family, or `--new-fixed-prompt` to overwrite).
+-   `--prompt-length N`: Character length of the fixed prompt slice (Default: 4x the first `--pp` value, roughly one token per 4 chars for English). Same create-only semantics as `--prompt-offset`. Slicing by characters (not tokens) keeps the prompt text identical across different tokenizers, which is what makes cross-model comparisons apples-to-apples.
+-   `--prompt-context-length N`: Character length of the fixed context slice sent before the prompt when `--depth > 0` (Default: 4096). Same create-only semantics.
+-   `--new-fixed-prompt`: Start a fresh fixed-prompt family: cut a new slice and overwrite the prompt file (the old file is backed up to `<path>.bak`) instead of reusing it. Implies `--fixed-prompt`. Results from earlier sessions are no longer comparable to this one.
 -   `--post-run-cmd`: Command to execute after each test run.
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
 -   `--latency-mode`: Method to measure latency: 'api' (call list models function) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
@@ -185,6 +190,29 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--exit-on-first-fail`: Stop execution on first failed test and exit with non-zero status.
 -   `--no-results-on-fail`: Prevent saving/printing any results when error is experienced, turns on --exit-on-first-fail as well.
 -   `--extra-body`: Extra JSON fields to merge into benchmark chat completion requests. Accepts repeated or comma-separated `key=value` / `key:value` entries, e.g. `--extra-body min_tokens=1024,ignore_eos=true`.
+
+### Reproducible fixed prompts
+
+By default llama-benchy samples a new random prompt slice from the book text for every request, which is good for avoiding prefix-cache effects but makes separate runs incomparable. For A/B tests across server configs, model versions, or sessions, pin the prompt with `--fixed-prompt`:
+
+```bash
+# Session 1: cuts the slice and writes the prompt file
+llama-benchy --base-url http://localhost:8000/v1 --model my-model --fixed-prompt
+
+# Session 2 (any other machine/user, same file): reads the same prompt
+llama-benchy --base-url http://localhost:8000/v1 --model my-model --fixed-prompt \
+    --prompt-path shared-prompt.json
+```
+
+Each run prints the source text SHA-256 and the prompt SHA-256 (plus the prompt's character and token counts); JSON reports record them in the metadata. Two result sets used the same prompt iff `prompt_sha256` (and `source_text_sha256`) match — `prompt_tokens` may legitimately differ between models with different tokenizers, since the cut is character-based.
+
+Workflow notes:
+
+-   Without `--prompt-path`, the file defaults to `~/.cache/llama-benchy/prompts/prompt-<source-hash-prefix>.json`, so repeat runs on the same machine pick up their own file automatically.
+-   A different `--prompt-path` is the way to keep multiple fixed baselines side by side.
+-   `--new-fixed-prompt` cuts a fresh slice and overwrites the file (backing up the old one to `<path>.bak`) — use it deliberately, since it breaks comparability with earlier sessions.
+-   With a fixed prompt the sent text never changes; `--adapt-prompt` only adjusts the expected token counts used in the metrics. Consider `--no-adapt-prompt` for cleaner comparisons.
+-   Token-based (per-run random) slicing remains the default because it avoids prefix-cache hits; for same-model A/B tests either approach is valid, but the fixed file is what makes results comparable across sessions.
 
 For fixed-output-length throughput benchmarks, prefer `--exact-tg` over manually passing `min_tokens` and `ignore_eos`:
 

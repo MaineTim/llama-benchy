@@ -259,6 +259,84 @@
       "title": "Max Concurrency",
       "type": "integer"
     },
+    "source_text_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "SHA-256 of the cached source book text",
+      "title": "Source Text Sha256"
+    },
+    "source_text_chars": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Character count of the source book text",
+      "title": "Source Text Chars"
+    },
+    "prompt_file": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path to the fixed prompt file used (--fixed-prompt)",
+      "title": "Prompt File"
+    },
+    "prompt_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "SHA-256 of the exact fixed prompt text sent; compare this (not token counts) to check two runs used the same prompt",
+      "title": "Prompt Sha256"
+    },
+    "prompt_chars": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Character length of the fixed prompt text",
+      "title": "Prompt Chars"
+    },
+    "prompt_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Fixed prompt token count under this run's tokenizer (differs across tokenizers by design)",
+      "title": "Prompt Tokens"
+    },
     "benchmarks": {
       "description": "List of benchmark run results",
       "items": {

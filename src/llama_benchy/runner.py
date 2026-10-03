@@ -16,12 +16,13 @@ class BenchmarkFailure(Exception):
     pass
 
 class BenchmarkRunner:
-    def __init__(self, config: BenchmarkConfig, client: LLMClient, prompt_generator: PromptGenerator, progress=None):
+    def __init__(self, config: BenchmarkConfig, client: LLMClient, prompt_generator: PromptGenerator, progress=None, prompt_metadata=None):
         self.config = config
         self.client = client
         self.prompt_gen = prompt_generator
         self.results = BenchmarkResults()
         self.progress = progress
+        self.prompt_metadata = prompt_metadata or {}
         self._next_request_id = 0
 
         # We need to track deltas from warmup to adapt prompts
@@ -253,7 +254,8 @@ class BenchmarkRunner:
                     latency_ms=latency * 1000,
                     model=self.config.model,
                     prefix_caching_enabled=self.config.enable_prefix_caching,
-                    max_concurrency=max(self.config.concurrency_levels) if self.config.concurrency_levels else 1
+                    max_concurrency=max(self.config.concurrency_levels) if self.config.concurrency_levels else 1,
+                    **self.prompt_metadata,
                 )
 
             self.results.save_report(self.config.save_result, self.config.result_format, max(self.config.concurrency_levels) if self.config.concurrency_levels else 1)
@@ -275,7 +277,8 @@ class BenchmarkRunner:
                             latency_ms=latency * 1000,
                             model=self.config.model,
                             prefix_caching_enabled=self.config.enable_prefix_caching,
-                            max_concurrency=max_concurrency
+                            max_concurrency=max_concurrency,
+                            **self.prompt_metadata,
                         )
                     self.results.save_report(self.config.save_result, self.config.result_format, max_concurrency)
             

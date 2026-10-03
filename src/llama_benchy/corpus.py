@@ -35,6 +35,8 @@ class TokenizedCorpus:
     def __init__(self, book_url: str, tokenizer_name: Optional[str], model_name: str):
         self.book_url = book_url
         self.tokenizer = self._get_tokenizer(model_name, tokenizer_name)
+        self.text = ""
+        self.text_sha256 = ""
         self.tokens = self._load_data()
 
     def _get_transformers_tokenizer(self, name: str):
@@ -97,6 +99,8 @@ class TokenizedCorpus:
                     f.write(text)
                 print(f"Saved text to cache: {cache_file}")
                 
+            self.text = text
+            self.text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
             return self.tokenizer.encode(text, add_special_tokens=False)
         except Exception as e:
             print(f"Error downloading or processing book: {e}")
@@ -107,6 +111,15 @@ class TokenizedCorpus:
 
     def get_tokens(self):
         return self.tokens
+
+    def get_text(self):
+        return self.text
+
+    def get_text_sha256(self):
+        return self.text_sha256
+
+    def get_text_chars(self):
+        return len(self.text)
 
     def __len__(self):
         return len(self.tokens)

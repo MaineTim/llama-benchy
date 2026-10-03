@@ -31,11 +31,28 @@ class ProgressEmitter:
     can't take down a benchmark run.
     """
 
-    def __init__(self, target: str, *, llama_benchy_version: str = "unknown") -> None:
+    def __init__(
+        self,
+        target: str,
+        *,
+        llama_benchy_version: str = "unknown",
+        source_text_sha256: Optional[str] = None,
+        prompt_sha256: Optional[str] = None,
+        prompt_tokens: Optional[int] = None,
+    ) -> None:
         self._target = target
         self._lock = threading.Lock()
         self._stream: Optional[IO[str]] = None
         self._owns_stream = False
+        self._prompt_fields = {
+            k: v
+            for k, v in {
+                "source_text_sha256": source_text_sha256,
+                "prompt_sha256": prompt_sha256,
+                "prompt_tokens": prompt_tokens,
+            }.items()
+            if v is not None
+        }
         self._open(llama_benchy_version)
 
     def _open(self, llama_benchy_version: str) -> None:
@@ -54,6 +71,7 @@ class ProgressEmitter:
                 "type": "header",
                 "ts": time.time(),
                 "llama_benchy_version": llama_benchy_version,
+                **self._prompt_fields,
             }
         )
 
@@ -123,7 +141,7 @@ class ProgressEmitter:
         )
 
     def bench_complete(self, status: str = "ok") -> None:
-        self._emit("bench_complete", status=status)
+        self._emit("bench_complete", status=status, **self._prompt_fields)
 
     def close(self) -> None:
         with self._lock:
