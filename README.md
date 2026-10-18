@@ -219,6 +219,21 @@ Workflow notes:
 -   If a pinned slice's measured token count deviates from the nominal shape size by more than 15%, the run warns; tune `--prompt-chars-per-token` when creating a new family to fit the text/token ratio.
 -   With a fixed prompt the sent text never changes; `--adapt-prompt` only adjusts the expected token counts used in the metrics. Consider `--no-adapt-prompt` for cleaner comparisons.
 -   Token-based (per-run random) slicing remains the default because it avoids prefix-cache hits; for same-model A/B tests either approach is valid, but the pinned slices are what make results comparable across sessions.
+-   If the *server-reported* prompt token count is far off the expected test size, llama-benchy prints a warning for that test (e.g. `Warning: server reported prompt_tokens very far from the expected … tokens`). This means the server likely truncated the prompt (context window too small) or the request did not carry the expected text. Throughput is still computed against the expected token count, so treat the flagged test's prefill numbers as invalid. The warning fires for any run, not just fixed-prompt runs.
+
+**Fixed-prompt fields in the JSON report.** With `--format json`, the `metadata` block records:
+
+| Field | Description |
+|-------|-------------|
+| `source_text_sha256` | SHA-256 of the cached source book text (present on all runs). |
+| `source_text_chars` | Character count of the source book text. |
+| `prompt_file` | Fixed prompt family directory used (fixed-prompt runs only). |
+| `prompt_sha256` | SHA-256 over the per-shape slice digests — the aggregate digest to compare between runs. |
+| `prompt_chars` | Total character length of all unique pinned slices. |
+| `prompt_tokens` | Total token count of all unique pinned slices, measured with this run's tokenizer. Differs across tokenizers by design. |
+| `prompt_slices` | Per test shape (`pp<N>@d<D>`): the slice's `prompt_sha256`, `prompt_chars`, measured `prompt_tokens`, and `context_chars`. |
+
+To verify two result sets used identical prompts, compare the per-shape `prompt_slices` entries (or the aggregate `prompt_sha256`) and `source_text_sha256`; do not compare `prompt_tokens`, which is only metadata.
 
 For fixed-output-length throughput benchmarks, prefer `--exact-tg` over manually passing `min_tokens` and `ignore_eos`:
 
@@ -380,7 +395,7 @@ date: 2026-02-06 16:36:05 | latency mode: generation
 ### Further analysis
 
 To perform additional analysis or generate any visualizations, you can output results in JSON or CSV. 
-JSON (`--format json`) will give you the most detailed data. If you specify `--save-total-throughput-timeseries`, then JSON will include total throughput in 1 second intervals.
+JSON (`--format json`) will give you the most detailed data. If you specify `--save-total-throughput-timeseries`, then JSON will include total throughput in 1 second intervals. Note that llama-benchy prints a warning when the server-reported prompt token count is far off the expected test size (the prompt was likely truncated, e.g. by a too-small context window) — see [Reproducible fixed prompts](#reproducible-fixed-prompts) for what that means for the reported numbers.
 
 - [Sample JSON file](schemas/sample.json)
 - [Sample JSON file with embedded documentation](schemas/sample.jsonc)
