@@ -168,12 +168,13 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--warmup-runs`: Number of discarded warmup runs per test shape (Default: 1). For concurrency `N`, each warmup run sends `N` requests. Also controls the number of discarded warmup probes for `--latency-mode generation`; it does not affect the initial prompt-adaptation warmup.
 -   `--short-warmup`: When `--pp` is greater than 2048 or `--tg` is greater than 512, run warmup passes at pp 2048 and tg 512 instead of the full size, to speed up warmup. Measured runs always use the requested sizes.
 -   `--no-cache`: Add noise to requests to improve prefix caching avoidance. Also sends `cache-prompt=false` to the server.
--   `--fixed-prompt`: Use the same prompt for every run **and across sessions**. The prompt is a fixed character slice of the source text, pinned to a JSON file; later runs read that file, so the exact same text is sent by construction. On first use the slice is cut from the (cached) source text and written to the prompt file; on later uses the file is read as-is. The source text hash and the prompt hash (plus the prompt's token count) are printed at run start and recorded in JSON reports, so you can verify at a glance that two result sets used the same prompt. Conflicts with `--no-cache`. If the server has prompt caching enabled, prefill numbers may be inflated by cache hits — make sure prompt caching is disabled on the server, otherwise ignore the reported prefill numbers.
--   `--prompt-path PATH`: Path to the fixed prompt file. Created on first use, read as-is on later runs. Implies `--fixed-prompt`. One file = one fixed prompt family — use different paths to keep independent baselines without clobbering each other.
--   `--prompt-offset N`: Character offset in the source text where the fixed slice starts (Default: 0). Only used when creating the prompt file; if it doesn't match an existing file the run is aborted (pass a different `--prompt-path` for a new family, or `--new-fixed-prompt` to overwrite).
--   `--prompt-length N`: Character length of the fixed prompt slice (Default: 4x the first `--pp` value, roughly one token per 4 chars for English). Same create-only semantics as `--prompt-offset`. Slicing by characters (not tokens) keeps the prompt text identical across different tokenizers, which is what makes cross-model comparisons apples-to-apples.
--   `--prompt-context-length N`: Character length of the fixed context slice sent before the prompt when `--depth > 0` (Default: 4096). Same create-only semantics.
--   `--new-fixed-prompt`: Start a fresh fixed-prompt family: cut a new slice and overwrite the prompt file (the old file is backed up to `<path>.bak`) instead of reusing it. Implies `--fixed-prompt`. Results from earlier sessions are no longer comparable to this one.
+-   `--fixed-prompt`: Use the same prompt for every run **and across sessions**. Each test shape (`pp` x `depth`) gets its own fixed character slice of the source text, pinned to a JSON file in a family directory; later runs read those files, so the exact same text is sent by construction. On first use a slice is cut from the (cached) source text and written; on later uses the file is read as-is. The source text hash and each slice's hash (plus character and measured token counts) are printed at run start and recorded in JSON reports, so you can verify at a glance that two result sets used the same prompts. Conflicts with `--no-cache`. If the server has prompt caching enabled, prefill numbers may be inflated by cache hits — make sure prompt caching is disabled on the server, otherwise ignore the reported prefill numbers.
+-   `--prompt-path PATH`: Path to the fixed prompt family directory (one `ctx<depth>_pp<pp>.json` slice per shape). Created on first use, read as-is on later runs. Implies `--fixed-prompt`. One directory = one fixed prompt family — use different paths to keep independent baselines without clobbering each other. If the path is an existing pre-v2 single-slice file, it keeps serving the shapes it matches and new shapes go to `<path>.d/`.
+-   `--prompt-offset N`: Character offset in the source text where the fixed slice starts (Default: 0). Only used when creating slice files; if it doesn't match an existing file the run is aborted (pass a different `--prompt-path` for a new family, or `--new-fixed-prompt` to overwrite).
+-   `--prompt-chars-per-token N`: Character budget per nominal token when cutting slices (Default: 4, roughly one token per 4 chars for English). A shape `pp<P>@d<D>` gets ~`N*P` prompt chars and `N*D` context chars. If a pinned slice's measured token count deviates >15% from the nominal size, the run warns.
+-   `--prompt-length N`: Character length of the fixed prompt slice. Only valid with a single `--pp` value; by default each shape's slice is sized per shape via `--prompt-chars-per-token`. Same create-only semantics as `--prompt-offset`. Slicing by characters (not tokens) keeps the prompt text identical across different tokenizers, which is what makes cross-model comparisons apples-to-apples.
+-   `--prompt-context-length N`: Character length of the fixed context slice sent before the prompt when `--depth > 0`. Only valid with a single non-zero `--depth` value; by default each shape's context is sized per shape. Same create-only semantics.
+-   `--new-fixed-prompt`: Start a fresh fixed-prompt family: cut new slices and overwrite the slice files (old files are backed up to `<file>.bak`) instead of reusing them. Implies `--fixed-prompt`. Results from earlier sessions are no longer comparable to this one.
 -   `--post-run-cmd`: Command to execute after each test run.
 -   `--book-url`: URL of a book to use for text generation (Defaults to Sherlock Holmes).
 -   `--latency-mode`: Method to measure latency: 'api' (call list models function) - default, 'generation' (single token generation), or 'none' (skip latency measurement).
@@ -196,23 +197,28 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 By default llama-benchy samples a new random prompt slice from the book text for every request, which is good for avoiding prefix-cache effects but makes separate runs incomparable. For A/B tests across server configs, model versions, or sessions, pin the prompt with `--fixed-prompt`:
 
 ```bash
-# Session 1: cuts the slice and writes the prompt file
-llama-benchy --base-url http://localhost:8000/v1 --model my-model --fixed-prompt
+# Session 1: cuts one pinned slice per (pp, depth) test shape
+llama-benchy --base-url http://localhost:8000/v1 --model my-model \
+    --pp 2048 16384 --depth 0 32768 --fixed-prompt
 
-# Session 2 (any other machine/user, same file): reads the same prompt
-llama-benchy --base-url http://localhost:8000/v1 --model my-model --fixed-prompt \
-    --prompt-path shared-prompt.json
+# Session 2 (any other machine/user, same family directory): same prompts
+llama-benchy --base-url http://localhost:8000/v1 --model my-model \
+    --pp 2048 16384 --depth 0 32768 --fixed-prompt \
+    --prompt-path shared-prompt-family
 ```
 
-Each run prints the source text SHA-256 and the prompt SHA-256 (plus the prompt's character and token counts); JSON reports record them in the metadata. Two result sets used the same prompt iff `prompt_sha256` (and `source_text_sha256`) match — `prompt_tokens` may legitimately differ between models with different tokenizers, since the cut is character-based.
+Each requested test shape gets its **own** pinned slice — a `pp16384` test never sends the text that was pinned for `pp2048`, which would silently inflate its throughput. Slices are cut by **character** offsets (tokenizer-independent, so cross-model comparisons are apples-to-apples), sized `--prompt-chars-per-token × tokens` per shape, and each is pinned to one JSON file named `ctx<depth>_pp<pp>.json` inside the family directory.
+
+Each run prints the source text SHA-256 and, per shape, the slice's SHA-256 plus its character and measured token counts; JSON reports record the per-shape digests in `metadata.prompt_slices` and an aggregate digest in `metadata.prompt_sha256`. Two result sets used the same prompts iff the per-shape `prompt_sha256` values (and `source_text_sha256`) match — `prompt_tokens` may legitimately differ between models with different tokenizers, since the cut is character-based.
 
 Workflow notes:
 
--   Without `--prompt-path`, the file defaults to `~/.cache/llama-benchy/prompts/prompt-<source-hash-prefix>.json`, so repeat runs on the same machine pick up their own file automatically.
--   A different `--prompt-path` is the way to keep multiple fixed baselines side by side.
--   `--new-fixed-prompt` cuts a fresh slice and overwrites the file (backing up the old one to `<path>.bak`) — use it deliberately, since it breaks comparability with earlier sessions.
+-   Without `--prompt-path`, slices default to `~/.cache/llama-benchy/prompts/<source-hash-prefix>/ctx<depth>_pp<pp>.json`, so repeat runs on the same machine pick up their files automatically. A single family is only comparable across runs that use the same shapes.
+-   A different `--prompt-path` (directory) is the way to keep multiple fixed baselines side by side. An existing pre-v2 single-slice file passed to `--prompt-path` keeps serving the shapes it matches; new shapes go to `<path>.d/`.
+-   `--new-fixed-prompt` cuts fresh slices and overwrites the files (backing the old ones up to `<file>.bak`) — use it deliberately, since it breaks comparability with earlier sessions.
+-   If a pinned slice's measured token count deviates from the nominal shape size by more than 15%, the run warns; tune `--prompt-chars-per-token` when creating a new family to fit the text/token ratio.
 -   With a fixed prompt the sent text never changes; `--adapt-prompt` only adjusts the expected token counts used in the metrics. Consider `--no-adapt-prompt` for cleaner comparisons.
--   Token-based (per-run random) slicing remains the default because it avoids prefix-cache hits; for same-model A/B tests either approach is valid, but the fixed file is what makes results comparable across sessions.
+-   Token-based (per-run random) slicing remains the default because it avoids prefix-cache hits; for same-model A/B tests either approach is valid, but the pinned slices are what make results comparable across sessions.
 
 For fixed-output-length throughput benchmarks, prefer `--exact-tg` over manually passing `min_tokens` and `ignore_eos`:
 

@@ -135,13 +135,25 @@ class BenchmarkRunner:
                                         gen_pp = min(current_pp, 2048)
                                         gen_tg = min(tg, 512)
 
-                                    prompt_batch = self.prompt_gen.generate_batch(
-                                        concurrency,
-                                        gen_pp,
-                                        current_depth,
-                                        self.config.no_cache,
-                                        fixed=self.config.fixed_prompt
-                                    )
+                                    if self.config.fixed_prompt:
+                                        # A pinned slice is keyed by the nominal test shape:
+                                        # warmup capping and prompt adaptation must not pick
+                                        # a different (or identical-for-all-shapes) slice.
+                                        prompt_batch = self.prompt_gen.generate_batch(
+                                            concurrency,
+                                            pp,
+                                            depth,
+                                            self.config.no_cache,
+                                            fixed=True
+                                        )
+                                    else:
+                                        prompt_batch = self.prompt_gen.generate_batch(
+                                            concurrency,
+                                            gen_pp,
+                                            current_depth,
+                                            self.config.no_cache,
+                                            fixed=False
+                                        )
 
                                     if self.config.enable_prefix_caching and depth > 0:
                                         # Phase 1: Context Load

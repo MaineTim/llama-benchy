@@ -4,19 +4,18 @@ Main entry point for the llama-benchy CLI.
 
 import asyncio
 import datetime
+import hashlib
+import json
 import os
 import sys
 from . import __version__
 from .config import BenchmarkConfig
 from .corpus import TokenizedCorpus
-from .promptfile import check_explicit_params, load_or_create, sha256_text
+from .promptfile import PromptMismatchError, PromptStore, sha256_text
 from .prompts import PromptGenerator
 from .client import LLMClient
 from .runner import BenchmarkRunner
 from .progress import ProgressEmitter
-
-DEFAULT_PROMPT_LENGTH_PER_TOKEN = 4  # ~4 chars per token for English
-DEFAULT_CONTEXT_LENGTH = 4096
 
 async def main_async():
     # 1. Parse Configuration
@@ -36,8 +35,8 @@ async def main_async():
 
     if config.fixed_prompt:
         print(
-            "Note: fixed prompt in use — the same prompt text is sent for every run and "
-            "every session. If the server has prompt caching enabled, prefill (pp) numbers "
+            "Note: fixed prompt in use — the pinned prompt text for each pp/depth shape is "
+            "sent for every run and every session. If the server has prompt caching enabled, prefill (pp) numbers "
             "may be inflated by cache hits. Make sure prompt caching is disabled on the "
             "server, otherwise ignore the prefill numbers reported below."
         )
@@ -50,86 +49,94 @@ async def main_async():
     )
     print(f"Total tokens available in text corpus: {len(corpus)}")
 
-    # 3b. Resolve the fixed prompt file (when --fixed-prompt family is in use)
-    fixed_prompt = None
+    # 3b. Resolve the fixed prompt family (when --fixed-prompt is in use):
+    # one pinned slice per (pp, depth) test shape.
+    prompt_store = None
     prompt_path = None
     if config.fixed_prompt:
-        offset = config.prompt_offset if config.prompt_offset is not None else 0
-        length = (
-            config.prompt_length
-            if config.prompt_length is not None
-            else DEFAULT_PROMPT_LENGTH_PER_TOKEN * config.pp_counts[0]
-        )
-        context_length = (
-            config.prompt_context_length
-            if config.prompt_context_length is not None
-            else DEFAULT_CONTEXT_LENGTH
-        )
-        if config.prompt_path:
-            prompt_path = config.prompt_path
-        else:
-            default_dir = os.path.join(
-                os.path.expanduser("~"), ".cache", "llama-benchy", "prompts"
-            )
-            prompt_path = os.path.join(
-                default_dir, f"prompt-{corpus.get_text_sha256()[:16]}.json"
-            )
+        tokenizer = corpus.get_tokenizer()
+        tokenizer_name = config.tokenizer or config.model
 
-        result = load_or_create(
-            prompt_path,
+        prompts_root = os.path.join(
+            os.path.expanduser("~"), ".cache", "llama-benchy", "prompts"
+        )
+        sha16 = corpus.get_text_sha256()[:16]
+        legacy_path = None
+        if config.prompt_path:
+            configured = os.path.abspath(config.prompt_path)
+            if os.path.isfile(configured):
+                # Pre-v2 usage: --prompt-path pointed at a single slice file.
+                # Keep serving matching shapes from it; new shapes go into a
+                # sibling family directory.
+                legacy_path = configured
+                family_dir = configured + ".d"
+            else:
+                family_dir = configured
+        else:
+            family_dir = os.path.join(prompts_root, sha16)
+            candidate = os.path.join(prompts_root, f"prompt-{sha16}.json")
+            if os.path.exists(candidate):
+                legacy_path = candidate
+        prompt_path = family_dir
+
+        prompt_store = PromptStore(
+            family_dir,
             book_url=config.book_url,
             source_sha256=corpus.get_text_sha256(),
             text=corpus.get_text(),
-            offset=offset,
-            context_length=context_length,
-            prompt_length=length,
+            tokenizer=tokenizer,
+            tokenizer_name=tokenizer_name,
+            offset=config.prompt_offset if config.prompt_offset is not None else 0,
+            chars_per_token=config.prompt_chars_per_token,
+            prompt_length=config.prompt_length,
+            context_length=config.prompt_context_length,
             new=config.new_fixed_prompt,
+            legacy_path=legacy_path,
+            explicit_offset=config.prompt_offset is not None,
+            explicit_prompt_length=config.prompt_length is not None,
+            explicit_context_length=config.prompt_context_length is not None,
         )
-        fixed_prompt = result.prompt
 
-        if result.status == "loaded":
-            mismatch = check_explicit_params(
-                fixed_prompt,
-                offset=config.prompt_offset,
-                prompt_length=config.prompt_length,
-                context_length=config.prompt_context_length,
+        print(f"Fixed prompt family: {family_dir} (one pinned slice per pp/depth shape)")
+        shapes = [
+            (pp, depth)
+            for depth in config.depths
+            for pp in config.pp_counts
+        ]
+        try:
+            for pp, depth in shapes:
+                prompt_store.get(pp, depth)
+        except PromptMismatchError as e:
+            print(
+                f"Error: {e}. The pinned slice file is the source of truth; use a "
+                "different --prompt-path for a new fixed prompt family, or "
+                "--new-fixed-prompt to regenerate it (each file is backed up to <file>.bak)."
             )
-            if mismatch:
+            sys.exit(1)
+        except ValueError as e:
+            print(f"Error preparing fixed prompt family: {e}")
+            sys.exit(1)
+
+        for pp, depth in shapes:
+            result = prompt_store.get(pp, depth)
+            fp = result.prompt
+            tokens = fp.prompt_tokens
+            if tokens is None:
+                tokens = len(tokenizer.encode(fp.prompt, add_special_tokens=False))
+            ctx_info = f" + ctx {len(fp.context)} chars" if depth > 0 and fp.context else ""
+            print(
+                f"  slice pp{pp}@d{depth} [{result.status}]: sha256 {sha256_text(fp.prompt)[:16]} "
+                f"({len(fp.prompt)} chars / {tokens} tokens{ctx_info}, offset {fp.offset})"
+            )
+            if result.status == "regenerated":
                 print(
-                    f"Error: {mismatch}. The prompt file is the source of truth; use a "
-                    "different --prompt-path for a new fixed prompt family, or "
-                    "--new-fixed-prompt to overwrite this one (it is backed up to <path>.bak)."
+                    f"    Note: --new-fixed-prompt — old slice for this shape had sha256 "
+                    f"{result.previous_sha256}; the file was backed up to <file>.bak. "
+                    "Results from earlier sessions are NOT comparable to this one."
                 )
-                sys.exit(1)
-            print(f"Fixed prompt: {prompt_path} (loaded)")
-        elif result.status == "created":
-            print(f"Fixed prompt: {prompt_path} (created — later sessions will reuse this file)")
-        else:  # regenerated
-            print(
-                f"Note: --new-fixed-prompt — regenerated prompt file at {prompt_path} "
-                f"(previous prompt sha256: {result.previous_sha256}, "
-                f"new prompt sha256: {sha256_text(fixed_prompt.prompt)}). "
-                f"Old file backed up to {prompt_path}.bak. "
-                "Results from earlier sessions are NOT comparable to this one."
-            )
-
-        if fixed_prompt.source_sha256 != corpus.get_text_sha256():
-            print(
-                f"Warning: prompt file was cut from a different source text "
-                f"(file sha256: {fixed_prompt.source_sha256}, "
-                f"current text sha256: {corpus.get_text_sha256()}). "
-                "The file content is used as-is."
-            )
-
-        tokenizer = corpus.get_tokenizer()
-        prompt_tokens = len(tokenizer.encode(fixed_prompt.prompt, add_special_tokens=False))
-        print(
-            f"  prompt sha256: {sha256_text(fixed_prompt.prompt)} "
-            f"({fixed_prompt.prompt_length} chars / {prompt_tokens} tokens, "
-            f"offset {fixed_prompt.offset})"
-        )
-        if fixed_prompt.context_length > 0:
-            print(f"  context: {fixed_prompt.context_length} chars (sent when --depth > 0)")
+            if result.warning:
+                for line in result.warning.split("\n"):
+                    print(f"    Warning: {line}")
 
         if config.adapt_prompt:
             print(
@@ -139,7 +146,7 @@ async def main_async():
             )
 
     # 4. Initialize Components
-    prompt_gen = PromptGenerator(corpus, fixed_prompt=fixed_prompt)
+    prompt_gen = PromptGenerator(corpus, prompt_store=prompt_store)
     client = LLMClient(
         config.base_url,
         config.api_key,
@@ -152,15 +159,28 @@ async def main_async():
         "source_text_sha256": corpus.get_text_sha256(),
         "source_text_chars": corpus.get_text_chars(),
     }
-    if fixed_prompt is not None:
+    if prompt_store is not None:
+        slices_meta = {}
+        for pp, depth in prompt_store.shapes():
+            fp = prompt_store.get(pp, depth).prompt
+            slices_meta[f"pp{pp}@d{depth}"] = {
+                "prompt_sha256": sha256_text(fp.prompt),
+                "prompt_chars": len(fp.prompt),
+                "prompt_tokens": fp.prompt_tokens
+                if fp.prompt_tokens is not None
+                else len(corpus.get_tokenizer().encode(fp.prompt, add_special_tokens=False)),
+                "context_chars": len(fp.context),
+            }
+        family_digest = hashlib.sha256(
+            json.dumps(slices_meta, sort_keys=True).encode("utf-8")
+        ).hexdigest()
         prompt_metadata.update(
             {
                 "prompt_file": prompt_path,
-                "prompt_sha256": sha256_text(fixed_prompt.prompt),
-                "prompt_chars": len(fixed_prompt.prompt),
-                "prompt_tokens": len(
-                    corpus.get_tokenizer().encode(fixed_prompt.prompt, add_special_tokens=False)
-                ),
+                "prompt_sha256": family_digest,
+                "prompt_chars": sum(s["prompt_chars"] for s in slices_meta.values()),
+                "prompt_tokens": sum(s["prompt_tokens"] for s in slices_meta.values()),
+                "prompt_slices": slices_meta,
             }
         )
 

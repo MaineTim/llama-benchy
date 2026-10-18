@@ -3,8 +3,10 @@ import sys
 
 import pytest
 
-from llama_benchy.promptfile import FixedPrompt, SCHEMA_VERSION
+from llama_benchy.promptfile import PromptStore, sha256_text
 from llama_benchy.prompts import PromptGenerator
+
+TEXT = "0123456789" * 1000  # 10000 chars of digits
 
 
 class _FakeTokenizer:
@@ -29,22 +31,21 @@ class _FakeCorpus:
         return self._tokens
 
 
-def _make_generator(fixed_prompt=None):
-    return PromptGenerator(_FakeCorpus(), fixed_prompt=fixed_prompt)
-
-
-def _make_fixed_prompt(context="ctxtext", prompt="prompttext"):
-    return FixedPrompt(
-        schema_version=SCHEMA_VERSION,
+def _make_store(tmp_path, **overrides):
+    kwargs = dict(
         book_url="https://example.com/book.txt",
-        source_sha256="0" * 64,
-        offset=1000,
-        context_length=len(context),
-        prompt_length=len(prompt),
-        context=context,
-        prompt=prompt,
-        created_at="2025-01-01T00:00:00Z",
+        source_sha256=sha256_text(TEXT),
+        text=TEXT,
+        tokenizer=_FakeTokenizer(),
+        tokenizer_name="fake/tokenizer",
+        chars_per_token=1,
     )
+    kwargs.update(overrides)
+    return PromptStore(str(tmp_path / "family"), **kwargs)
+
+
+def _make_generator(prompt_store=None):
+    return PromptGenerator(_FakeCorpus(), prompt_store=prompt_store)
 
 
 def test_generate_batch_non_fixed_varies_between_calls():
@@ -58,31 +59,37 @@ def test_generate_batch_non_fixed_varies_between_calls():
     assert batch1 != batch2
 
 
-def test_generate_batch_fixed_uses_prompt_file():
-    gen = _make_generator(fixed_prompt=_make_fixed_prompt())
+def test_generate_batch_fixed_uses_pinned_slice(tmp_path):
+    gen = _make_generator(prompt_store=_make_store(tmp_path))
     batch1 = gen.generate_batch(3, 16, 4, no_cache=False, fixed=True)
     batch2 = gen.generate_batch(3, 16, 4, no_cache=False, fixed=True)
     assert batch1 == batch2
-    assert all(c == "ctxtext" and p == "prompttext" for c, p in batch1)
+    # chars_per_token=1: 4 context chars + 16 prompt chars
+    assert all(c == TEXT[:4] and p == TEXT[4:20] for c, p in batch1)
 
 
-def test_generate_batch_fixed_same_text_across_shapes():
-    # The file is the anchor: every (pp, depth) shape sends the pinned text.
-    gen = _make_generator(fixed_prompt=_make_fixed_prompt())
+def test_generate_batch_fixed_slices_are_shape_specific(tmp_path):
+    # Regression: every (pp, depth) shape must send its own pinned text.
+    # With one shared slice, pp16384 used to send the pp2048 text and the
+    # reported throughput was inflated by the size ratio.
+    gen = _make_generator(prompt_store=_make_store(tmp_path))
     small = gen.generate_batch(1, 16, 4, no_cache=False, fixed=True)
     large = gen.generate_batch(1, 32, 8, no_cache=False, fixed=True)
-    assert [p for _, p in small] == [p for _, p in large]
+    assert [len(p) for _, p in small] == [16]
+    assert [len(p) for _, p in large] == [32]
+    assert [len(c) for c, _ in small] == [4]
+    assert [len(c) for c, _ in large] == [8]
 
 
-def test_generate_batch_fixed_empty_context_when_depth_zero():
-    gen = _make_generator(fixed_prompt=_make_fixed_prompt())
+def test_generate_batch_fixed_empty_context_when_depth_zero(tmp_path):
+    gen = _make_generator(prompt_store=_make_store(tmp_path))
     batch = gen.generate_batch(1, 16, 0, no_cache=False, fixed=True)
-    assert batch == [("", "prompttext")]
+    assert batch == [("", TEXT[:16])]
 
 
-def test_generate_batch_fixed_requires_prompt_file():
+def test_generate_batch_fixed_requires_prompt_store():
     gen = _make_generator()
-    with pytest.raises(RuntimeError, match="no prompt file"):
+    with pytest.raises(RuntimeError, match="no prompt store"):
         gen.generate_batch(1, 16, 0, no_cache=False, fixed=True)
 
 
@@ -117,7 +124,7 @@ def test_prompt_path_implies_fixed_and_conflicts_with_no_cache():
             "--model",
             "foo/bar",
             "--prompt-path",
-            "/tmp/nonexistent-prompt.json",
+            "/tmp/nonexistent-prompt-dir",
             "--no-cache",
         ],
         capture_output=True,

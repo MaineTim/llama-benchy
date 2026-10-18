@@ -48,8 +48,8 @@ version and the producer version before any data events arrive.
 |------------------------|--------|--------------------------------------|
 | `llama_benchy_version` | string | Version string of the producer.      |
 | `source_text_sha256`   | string | Optional. SHA-256 of the cached source book text. Present when llama-benchy has loaded the corpus. |
-| `prompt_sha256`        | string | Optional. SHA-256 of the exact fixed prompt text sent to the server. Present only for fixed-prompt runs (`--fixed-prompt` / `--prompt-path`). Compare this field between two streams to verify they used the same prompt. |
-| `prompt_tokens`        | integer| Optional. Fixed prompt token count under the benchmark tokenizer. Present only for fixed-prompt runs. Differs across tokenizers by design — use `prompt_sha256` for equality checks. |
+| `prompt_sha256`        | string | Optional. SHA-256 over the per-shape fixed prompt digests (one pinned slice per pp/depth shape). Present only for fixed-prompt runs (`--fixed-prompt` / `--prompt-path`). Compare this field between two streams (with identical shapes) to verify they used the same prompts; the full JSON report additionally lists per-shape digests in `metadata.prompt_slices`. |
+| `prompt_tokens`        | integer| Optional. Total fixed prompt token count (sum over all unique pinned slices) under the benchmark tokenizer. Present only for fixed-prompt runs. Differs across tokenizers by design — use `prompt_sha256` for equality checks. |
 
 ### `request_start`
 

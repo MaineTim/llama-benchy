@@ -64,6 +64,10 @@ class BenchmarkConfig(BaseModel):
         None,
         description="Character length of the fixed context slice preceding the prompt (when creating the prompt file). Implies --fixed-prompt.",
     )
+    prompt_chars_per_token: int = Field(
+        4,
+        description="Character budget per nominal token when cutting fixed prompt/context slices (~4 chars per token for English)",
+    )
     new_fixed_prompt: bool = Field(
         False,
         description="Cut a fresh slice and overwrite the existing prompt file (backed up to <path>.bak) instead of reusing it",
@@ -327,9 +331,10 @@ class BenchmarkConfig(BaseModel):
             "--fixed-prompt",
             action="store_true",
             help=(
-                "Use the same prompt for every run and across sessions. The prompt is a fixed "
-                "character slice of the source text, pinned to a JSON file (default under "
-                "~/.cache/llama-benchy/prompts/); later runs read that file. Conflicts with --no-cache."
+                "Use the same prompt for every run and across sessions. Each test shape "
+                "(pp x depth) gets its own fixed character slice of the source text, pinned to a "
+                "JSON file in a family directory (default under ~/.cache/llama-benchy/prompts/); "
+                "later runs read those files. Conflicts with --no-cache."
             ),
         )
         parser.add_argument(
@@ -338,9 +343,11 @@ class BenchmarkConfig(BaseModel):
             default=None,
             metavar="PATH",
             help=(
-                "Path to the fixed prompt file. Created on first use, read as-is on later runs. "
-                "Implies --fixed-prompt. One file = one fixed prompt family; use different paths "
-                "to keep independent baselines."
+                "Path to the fixed prompt family directory (one pinned slice file per pp/depth "
+                "shape). Created on first use, read as-is on later runs. Implies --fixed-prompt. "
+                "One directory = one fixed prompt family; use different paths to keep independent "
+                "baselines. If the path is an existing single-slice (v1) file it keeps serving "
+                "matching shapes and new shapes go to <path>.d/."
             ),
         )
         parser.add_argument(
@@ -357,9 +364,9 @@ class BenchmarkConfig(BaseModel):
             type=int,
             default=None,
             help=(
-                "Character length of the fixed prompt slice (default: 4x the first --pp value, "
-                "roughly one token per 4 chars for English). Only used when creating the prompt file; "
-                "must match an existing file."
+                "Character length of the fixed prompt slice. Only valid with a single --pp value; "
+                "by default each shape's slice is cut at --prompt-chars-per-token x pp chars. "
+                "Only used when creating the slice file; must match an existing file."
             ),
         )
         parser.add_argument(
@@ -367,8 +374,22 @@ class BenchmarkConfig(BaseModel):
             type=int,
             default=None,
             help=(
-                "Character length of the fixed context slice sent before the prompt when --depth > 0 "
-                "(default: 4096). Only used when creating the prompt file; must match an existing file."
+                "Character length of the fixed context slice sent before the prompt when --depth > 0. "
+                "Only valid with a single non-zero --depth value; by default each shape's context is "
+                "cut at --prompt-chars-per-token x depth chars. Only used when creating the slice "
+                "file; must match an existing file."
+            ),
+        )
+        parser.add_argument(
+            "--prompt-chars-per-token",
+            type=int,
+            default=4,
+            metavar="N",
+            help=(
+                "Character budget per nominal token when cutting fixed prompt slices "
+                "(default: 4, roughly one token per 4 chars for English). Each test shape "
+                "pp<P>@d<D> gets its own pinned slice of ~N*<P> prompt chars and N*<D> "
+                "context chars. Only used when creating slice files."
             ),
         )
         parser.add_argument(
@@ -489,6 +510,24 @@ class BenchmarkConfig(BaseModel):
             parser.error("--prompt-length must be > 0")
         if args.prompt_context_length is not None and args.prompt_context_length < 0:
             parser.error("--prompt-context-length must be >= 0")
+        if args.prompt_chars_per_token <= 0:
+            parser.error("--prompt-chars-per-token must be > 0")
+        if args.prompt_length is not None and len(args.pp) > 1:
+            parser.error(
+                "--prompt-length pins one character length for every requested --pp shape, which "
+                "would send identical prompts at different nominal sizes. Omit --prompt-length "
+                "(slices are sized per shape) or tune --prompt-chars-per-token instead."
+            )
+        if (
+            args.prompt_context_length is not None
+            and len({d for d in args.depth if d > 0}) > 1
+        ):
+            parser.error(
+                "--prompt-context-length pins one character length for every requested --depth > 0, "
+                "which would send identical contexts at different nominal depths. Omit "
+                "--prompt-context-length (contexts are sized per shape) or tune "
+                "--prompt-chars-per-token instead."
+            )
 
         fixed_requested = (
             args.fixed_prompt
@@ -552,6 +591,7 @@ class BenchmarkConfig(BaseModel):
             prompt_offset=args.prompt_offset,
             prompt_length=args.prompt_length,
             prompt_context_length=args.prompt_context_length,
+            prompt_chars_per_token=args.prompt_chars_per_token,
             new_fixed_prompt=args.new_fixed_prompt,
             latency_mode=args.latency_mode,
             no_warmup=args.no_warmup,

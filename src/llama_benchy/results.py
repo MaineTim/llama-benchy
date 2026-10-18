@@ -26,10 +26,11 @@ class BenchmarkMetadata(BaseModel):
     max_concurrency: int = Field(..., description="Maximum concurrency level used in the suite")
     source_text_sha256: Optional[str] = Field(None, description="SHA-256 of the cached source book text")
     source_text_chars: Optional[int] = Field(None, description="Character count of the source book text")
-    prompt_file: Optional[str] = Field(None, description="Path to the fixed prompt file used (--fixed-prompt)")
-    prompt_sha256: Optional[str] = Field(None, description="SHA-256 of the exact fixed prompt text sent; compare this (not token counts) to check two runs used the same prompt")
-    prompt_chars: Optional[int] = Field(None, description="Character length of the fixed prompt text")
-    prompt_tokens: Optional[int] = Field(None, description="Fixed prompt token count under this run's tokenizer (differs across tokenizers by design)")
+    prompt_file: Optional[str] = Field(None, description="Fixed prompt family directory used (--fixed-prompt)")
+    prompt_sha256: Optional[str] = Field(None, description="SHA-256 over the per-shape fixed prompt digests; compare this (not token counts) to check two runs used the same prompts")
+    prompt_chars: Optional[int] = Field(None, description="Total character length of all unique fixed prompt slices")
+    prompt_tokens: Optional[int] = Field(None, description="Total token count (this run's tokenizer) of all unique fixed prompt slices (differs across tokenizers by design)")
+    prompt_slices: Optional[Dict[str, Any]] = Field(None, description="Per test shape (pp<N>@d<D>) pinned slice digest: sha256, chars, measured tokens")
 
 class BenchmarkRun(BaseModel):
     concurrency: int = Field(..., description="Concurrency level for this run")
@@ -172,6 +173,7 @@ class BenchmarkResults:
         agg_throughput_series: List[TimeSeries] = []
         agg_req_throughput_series: List[List[TimeSeries]] = []
 
+        usage_mismatches: List["RequestResult"] = []
         for batch in run_results:
             self._process_batch(
                 batch, 
@@ -190,7 +192,22 @@ class BenchmarkResults:
                 save_total_throughput_timeseries=save_total_throughput_timeseries,
                 save_all_throughput_timeseries=save_all_throughput_timeseries,
                 agg_throughput_series=agg_throughput_series,
-                agg_req_throughput_series=agg_req_throughput_series
+                agg_req_throughput_series=agg_req_throughput_series,
+                usage_mismatches=usage_mismatches
+            )
+
+        if usage_mismatches:
+            reported = sorted({r.prompt_tokens for r in usage_mismatches})
+            shown = ", ".join(str(t) for t in reported[:5])
+            if len(reported) > 5:
+                shown += ", ..."
+            print(
+                f"Warning: server reported prompt_tokens very far from the expected "
+                f"{expected_pp_tokens} tokens (reported: {shown}) for test "
+                f"pp{pp} tg{tg} depth {depth} ({len(usage_mismatches)} requests). "
+                "t/s is computed against the expected token count. The server likely "
+                "truncated the prompt (context too small) or the request did not carry "
+                "the expected text — treat this test's prefill numbers as invalid."
             )
 
         # Calculate metrics for BenchmarkRun
@@ -243,7 +260,8 @@ class BenchmarkResults:
                        save_total_throughput_timeseries: bool = False,
                        save_all_throughput_timeseries: bool = False,
                        agg_throughput_series: Optional[List[TimeSeries]] = None,
-                       agg_req_throughput_series: Optional[List[List[TimeSeries]]] = None):
+                       agg_req_throughput_series: Optional[List[List[TimeSeries]]] = None,
+                       usage_mismatches: Optional[List["RequestResult"]] = None):
         
         valid_results = [r for r in results if r and not r.error]
         if not valid_results:
@@ -291,6 +309,8 @@ class BenchmarkResults:
                 diff = abs(res.prompt_tokens - expected_pp_tokens)
                 if diff < expected_pp_tokens * 0.2:
                     prompt_tokens = res.prompt_tokens
+                elif usage_mismatches is not None:
+                    usage_mismatches.append(res)
             
             batch_prompt_tokens += prompt_tokens
             batch_gen_tokens += res.total_tokens

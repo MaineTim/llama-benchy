@@ -73,3 +73,43 @@ def test_new_fixed_prompt_implies_fixed_prompt():
     cfg = _from_args(BASE_ARGS + ["--new-fixed-prompt"])
     assert cfg.fixed_prompt is True
     assert cfg.new_fixed_prompt is True
+
+
+def test_prompt_chars_per_token_defaults_to_four():
+    cfg = _from_args(BASE_ARGS)
+    assert cfg.prompt_chars_per_token == 4
+
+
+def test_prompt_chars_per_token_configurable():
+    cfg = _from_args(BASE_ARGS + ["--prompt-chars-per-token", "3"])
+    assert cfg.prompt_chars_per_token == 3
+
+
+def test_prompt_chars_per_token_zero_rejected():
+    with pytest.raises(SystemExit):
+        _from_args(BASE_ARGS + ["--prompt-chars-per-token", "0"])
+
+
+def test_explicit_prompt_length_with_multiple_pp_rejected():
+    with pytest.raises(SystemExit):
+        _from_args(BASE_ARGS + ["--prompt-length", "8192", "--pp", "2048", "16384"])
+
+
+def test_explicit_prompt_length_with_single_pp_allowed():
+    cfg = _from_args(BASE_ARGS + ["--prompt-length", "8192", "--pp", "2048"])
+    assert cfg.prompt_length == 8192
+
+
+def test_explicit_context_length_with_multiple_depths_rejected():
+    with pytest.raises(SystemExit):
+        _from_args(
+            BASE_ARGS
+            + ["--prompt-context-length", "4096", "--depth", "4096", "32768"]
+        )
+
+
+def test_explicit_context_length_with_single_nonzero_depth_allowed():
+    cfg = _from_args(
+        BASE_ARGS + ["--prompt-context-length", "4096", "--depth", "0", "32768"]
+    )
+    assert cfg.prompt_context_length == 4096

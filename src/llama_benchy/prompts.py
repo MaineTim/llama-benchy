@@ -3,16 +3,16 @@ import numpy as np
 from typing import Tuple, List, Optional
 
 from .corpus import TokenizedCorpus
-from .promptfile import FixedPrompt
+from .promptfile import PromptStore
 
 class PromptGenerator:
-    def __init__(self, corpus: TokenizedCorpus, fixed_prompt: Optional[FixedPrompt] = None):
+    def __init__(self, corpus: TokenizedCorpus, prompt_store: Optional[PromptStore] = None):
         self.corpus = corpus
         self.tokenizer = corpus.get_tokenizer()
         self.all_tokens = corpus.get_tokens()
-        # Pinned (context, prompt) from a prompt file, when --fixed-prompt is
-        # in use. The file is the cross-session source of truth.
-        self.fixed_prompt = fixed_prompt
+        # Pinned per-shape slices used when --fixed-prompt is in use.
+        # The slice files are the cross-session source of truth.
+        self.prompt_store = prompt_store
 
     def generate(self, prompt_tokens: int, context_tokens: int = 0, no_cache: bool = False) -> Tuple[str, str]:
         """
@@ -56,20 +56,22 @@ class PromptGenerator:
         Generates a batch of (context, prompt) pairs.
 
         If `fixed` is True, every run reuses the exact (context, prompt) text
-        pinned in the prompt file, so results are comparable across sessions.
-        The requested prompt/context token sizes are nominal in this mode; the
-        pinned text is sent as-is. With concurrency > 1 all slots share the
-        same pinned text.
+        pinned for this (prompt_tokens, context_tokens) shape in the prompt
+        store, so results are comparable across sessions. `prompt_tokens` and
+        `context_tokens` must be the *nominal* test shape (not warmup-capped
+        or adapt-adjusted values), since they select the pinned slice. With
+        concurrency > 1 all slots share the same pinned text.
         """
         if not fixed:
             return [self.generate(prompt_tokens, context_tokens, no_cache) for _ in range(batch_size)]
 
-        if self.fixed_prompt is None:
+        if self.prompt_store is None:
             raise RuntimeError(
-                "Fixed prompts requested but no prompt file was loaded. "
-                "Re-run to create the prompt file (or check --prompt-path)."
+                "Fixed prompts requested but no prompt store was configured. "
+                "Re-run to create the prompt family (or check --prompt-path)."
             )
 
-        context_text = self.fixed_prompt.context if context_tokens > 0 else ""
-        prompt_text = self.fixed_prompt.prompt
+        pinned = self.prompt_store.get(prompt_tokens, context_tokens)
+        context_text = pinned.prompt.context if context_tokens > 0 else ""
+        prompt_text = pinned.prompt.prompt
         return [(context_text, prompt_text) for _ in range(batch_size)]

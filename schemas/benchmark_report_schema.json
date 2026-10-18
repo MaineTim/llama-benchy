@@ -295,7 +295,7 @@
         }
       ],
       "default": null,
-      "description": "Path to the fixed prompt file used (--fixed-prompt)",
+      "description": "Fixed prompt family directory used (--fixed-prompt)",
       "title": "Prompt File"
     },
     "prompt_sha256": {
@@ -308,7 +308,7 @@
         }
       ],
       "default": null,
-      "description": "SHA-256 of the exact fixed prompt text sent; compare this (not token counts) to check two runs used the same prompt",
+      "description": "SHA-256 over the per-shape fixed prompt digests; compare this (not token counts) to check two runs used the same prompts",
       "title": "Prompt Sha256"
     },
     "prompt_chars": {
@@ -321,7 +321,7 @@
         }
       ],
       "default": null,
-      "description": "Character length of the fixed prompt text",
+      "description": "Total character length of all unique fixed prompt slices",
       "title": "Prompt Chars"
     },
     "prompt_tokens": {
@@ -334,8 +334,22 @@
         }
       ],
       "default": null,
-      "description": "Fixed prompt token count under this run's tokenizer (differs across tokenizers by design)",
+      "description": "Total token count (this run's tokenizer) of all unique fixed prompt slices (differs across tokenizers by design)",
       "title": "Prompt Tokens"
+    },
+    "prompt_slices": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per test shape (pp<N>@d<D>) pinned slice digest: sha256, chars, measured tokens",
+      "title": "Prompt Slices"
     },
     "benchmarks": {
       "description": "List of benchmark run results",
